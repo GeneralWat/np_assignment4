@@ -39,57 +39,150 @@ struct game{
     int score1 = 0;
     int score2 = 0;
     int stage = 0;
+    int nrOfRounds = 0;
+    int countDown = 4;
+    time_t sendTime;
 };
 
 bool checkClientsTime(client *client){
   time_t end = time(NULL);
   int sec = (end - client->start); 
-  printf("Sec: %d\n", sec);
   bool result = false;
-  if(sec >= 2){//Have they answered the last 2 seconds?
+  if(sec >= 3){//Have they answered the last 2 seconds? 
     result = true;
   }
   return result;
 }
 
-void whoWon(game *games){
-    if(games->clients[0]->timeout == true){
+void whoWon(game *games, char msg[]){ //Check round score and send to clients
+    games->nrOfRounds++;
+    if(games->clients[0]->timeout == true && games->clients[1]->timeout == false){
         games->score2++;
+        sprintf(msg,"Round %d\nYou timed out!, Other player won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+        send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+        sprintf(msg,"Rounds %d\nOther player timed out!, You won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+        send(games->clients[1]->fdNr, msg, strlen(msg), 0);
         games->clients[0]->timeout = false;
-    }else if(games->clients[1]->timeout == true){
-        games->score2++;
+        printf("Score now is %d vs %d\n", games->score1, games->score2);
+    }else if(games->clients[1]->timeout == true && games->clients[0]->timeout == false){
+        games->score1++;
+        sprintf(msg,"Round %d\nYou timed out!, Other player won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+        send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+        sprintf(msg,"Round %d\nOther player timed out!, You won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+        send(games->clients[0]->fdNr, msg, strlen(msg), 0);
         games->clients[1]->timeout = false;
+        printf("Score now is %d vs %d\n", games->score1, games->score2);
     }else if(games->clients[0]->timeout == true && games->clients[1]->timeout == true){
         games->clients[0]->timeout = false;
         games->clients[1]->timeout = false;
-        games->stage = 1;
+        sprintf(msg,"Round %d\nBoth timed out! Restarting round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+        for(int i = 0; i < games->readyPlayers; ++i){
+            send(games->clients[i]->fdNr, msg, strlen(msg), 0);
+        }
+        printf("Score now is %d vs %d\n", games->score1, games->score2);
     }else{
-    if(games->clients[0]->rpsPick == games->clients[1]->rpsPick && games->clients[0]->rpsPick != 0 && games->clients[1]->rpsPick != 0){
-        printf("The result is Equal!\n");
-    }else if(games->clients[0]->rpsPick == ROCK && games->clients[1]->rpsPick == SCISSOR){
-        games->score1++;
-        printf("Score now is %d vs %d\n", games->score1, games->score2);
-    }else if(games->clients[1]->rpsPick == ROCK && games->clients[0]->rpsPick == SCISSOR){
-        games->score2++;
-        printf("Score now is %d vs %d\n", games->score1, games->score2);
-    }else if(games->clients[0]->rpsPick == SCISSOR && games->clients[1]->rpsPick == PAPER){
-        games->score1++;
-        printf("Score now is %d vs %d\n", games->score1, games->score2);
-    }else if(games->clients[1]->rpsPick == SCISSOR && games->clients[0]->rpsPick == PAPER){
-        games->score2++;
-        printf("Score now is %d vs %d\n", games->score1, games->score2);
-    }else if(games->clients[0]->rpsPick == PAPER && games->clients[1]->rpsPick == ROCK){
-        games->score1++;
-        printf("Score now is %d vs %d\n", games->score1, games->score2);
-    }else if(games->clients[1]->rpsPick == PAPER && games->clients[0]->rpsPick == ROCK){
-        games->score2++;
-        printf("Score now is %d vs %d\n", games->score1, games->score2);
+        if(games->clients[0]->rpsPick == games->clients[1]->rpsPick && games->clients[0]->rpsPick != 0 && games->clients[1]->rpsPick != 0){
+            printf("The result is Equal!\n");
+            sprintf(msg, "Round %d\nBoth picked the same!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            for(int i = 0; i < games->readyPlayers; ++i){
+                send(games->clients[i]->fdNr, msg, strlen(msg), 0);
+            }
+        }else if(games->clients[0]->rpsPick == ROCK && games->clients[1]->rpsPick == SCISSOR){
+            games->score1++;
+            printf("Score now is %d vs %d\n", games->score1, games->score2);
+            sprintf(msg, "Round %d\nYou won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+        }else if(games->clients[1]->rpsPick == ROCK && games->clients[0]->rpsPick == SCISSOR){
+            games->score2++;
+            printf("Score now is %d vs %d\n", games->score1, games->score2);
+            sprintf(msg, "Round %d\nYou won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+        }else if(games->clients[0]->rpsPick == SCISSOR && games->clients[1]->rpsPick == PAPER){
+            games->score1++;
+            printf("Score now is %d vs %d\n", games->score1, games->score2);
+            sprintf(msg, "Round %d\nYou won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+        }else if(games->clients[1]->rpsPick == SCISSOR && games->clients[0]->rpsPick == PAPER){
+            games->score2++;
+            printf("Score now is %d vs %d\n", games->score1, games->score2);
+            sprintf(msg, "Round %d\nYou won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+        }else if(games->clients[0]->rpsPick == PAPER && games->clients[1]->rpsPick == ROCK){
+            games->score1++;
+            printf("Score now is %d vs %d\n", games->score1, games->score2);
+            sprintf(msg, "Round %d\nYou won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+        }else if(games->clients[1]->rpsPick == PAPER && games->clients[0]->rpsPick == ROCK){
+            games->score2++;
+            printf("Score now is %d vs %d\n", games->score1, games->score2);
+            sprintf(msg, "Round %d\nYou won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+        }
     }
-    }
+    games->stage = 1;
 }
 
 void rpsMsg(char msg[]){
     strcpy(msg, "1. Rock\n2. Paper\n3. Scissor\n");
+}
+
+void menuMsg(char msg[]){
+    strcpy(msg, "Please select:\n1. Play\n2. Watch\n0. Exit\n");
+}
+
+void removeGame(game *games[], int &nrOfGames, int indexToRemove){
+    if(games[indexToRemove] != nullptr){
+        delete games[indexToRemove];
+        nrOfGames--;
+        if(nrOfGames > 1 && indexToRemove != nrOfGames -1){
+            games[indexToRemove] = games[nrOfGames];
+        }
+    }
+}
+
+void gameWon(game *game[], char msg[], int &gameIndex, int &nrOfGames){ //Just to check if someone has a score of 3
+    if(game[gameIndex]->score1 == 3 || game[gameIndex]->score2 == 3){
+        if(game[gameIndex]->score1 == 3){
+            strcpy(msg, "You won!\n");
+            if(send(game[gameIndex]->clients[0]->fdNr, msg, strlen(msg), 0) == -1){
+                perror("send");
+            }
+            strcpy(msg, "You lost!\n");//Then player 2 lost
+            if(send(game[gameIndex]->clients[1]->fdNr, msg, strlen(msg), 0) == -1){
+                perror("send");
+            }
+        }else if(game[gameIndex]->score2 == 3){
+            strcpy(msg, "You won!\n");
+            if(send(game[gameIndex]->clients[1]->fdNr, msg, strlen(msg), 0) == -1){
+                perror("send");
+            }
+            strcpy(msg, "You lost!\n");//Then player 2 lost
+            if(send(game[gameIndex]->clients[0]->fdNr, msg, strlen(msg), 0) == -1){
+                perror("send");
+            }
+        }
+        menuMsg(msg); //Send menu to everyone!
+        for(int j = 0; j < game[gameIndex]->readyPlayers; ++j){
+            game[gameIndex]->clients[j]->rpsPick = 0;
+            game[gameIndex]->clients[j]->inGame = false;
+            if(send(game[gameIndex]->clients[j]->fdNr, msg, strlen(msg), 0) == -1){
+                perror("send");
+            }
+        }
+        removeGame(game, nrOfGames, gameIndex);
+    }
 }
 
 void checkJobbList(int signum){
@@ -104,10 +197,31 @@ void checkJobbList(int signum){
 
 void checkClients(game *games[], client *clients[], int &nrOfClients, int &nrOfGames, char msg[]) //Function to check if clients have answered last 2 secs
 {
-    printf("Nr of games_ %d\n", nrOfGames);
+    //printf("Nr of games_ %d\n", nrOfGames);
     if(nrOfGames > 0){
         for(int i = 0; i < nrOfGames; ++i){
             if(games[i]->stage == 1){
+                games[i]->countDown--;
+                for(int j = 0; j < games[i]->readyPlayers; ++j){
+                    if(games[i]->countDown > 0){
+                        sprintf(msg, "Game will start in %d seconds\n", games[i]->countDown);
+                        send(games[i]->clients[j]->fdNr, msg, strlen(msg), 0);
+                    }
+                    if(games[i]->countDown == 0){ // To wait the extra second
+                        games[i]->stage++;
+                        rpsMsg(msg);
+                        for(int z = 0; z < games[i]->readyPlayers; ++z){
+                            send(games[i]->clients[z]->fdNr, msg, strlen(msg), 0);
+                            games[i]->sendTime = time(NULL);
+                            games[i]->clients[z]->rpsPick = 0;
+                            games[i]->clients[z]->start = time(NULL); //Start timer!
+                        }
+                        games[i]->countDown = 4;
+                        break;
+                    }
+                }
+            }
+            if(games[i]->stage == 2){
                 for(int j = 0; j < games[i]->readyPlayers; ++j){
                     if(games[i]->clients[j]->rpsPick == 0 && checkClientsTime(games[i]->clients[j]) == true){
                         printf("Player %d timeout\n", j + 1);
@@ -117,16 +231,12 @@ void checkClients(game *games[], client *clients[], int &nrOfClients, int &nrOfG
             }
         }
         for(int i = 0; i < nrOfGames; ++i){
-            if(games[i]->stage == 1){
+            if(games[i]->stage == 2){
                 for(int j = 0; j < games[i]->readyPlayers; ++j){
                     if(games[i]->clients[j]->timeout ){
-                        whoWon(games[i]);
-                        rpsMsg(msg);
-                        for(int z = 0; z < games[i]->readyPlayers; ++z){
-                            send(games[i]->clients[z]->fdNr, msg, strlen(msg), 0);
-                            games[i]->clients[z]->start = time(NULL);
-                        }
-                        games[i]->stage++;
+                        whoWon(games[i], msg);
+                        gameWon(games, msg, i, nrOfGames);
+                        games[i]->stage = 1;
                         break;
                     }
                 }
@@ -158,15 +268,6 @@ void freeClient(client *clients[], int &nrOfClients, int indexToRemove){
     }
 }
 
-void removeGame(game *games[], int &nrOfGames, int indexToRemove){
-    if(games[indexToRemove] != nullptr){
-        delete games[indexToRemove];
-        nrOfGames--;
-        if(nrOfGames > 1 && indexToRemove != nrOfGames -1){
-            games[indexToRemove] = games[nrOfGames]; printf("Called\n");
-        }
-    }
-}
 
 void resetClient(game *games[], client *clients[], int nrOf, int clientIndex, int gameIndex){
     for(int i = 0; i < nrOf; ++i){
@@ -177,10 +278,6 @@ void resetClient(game *games[], client *clients[], int nrOf, int clientIndex, in
             clients[i]->rpsPick = 0;
         }
     }
-}
-
-void menuMsg(char msg[]){
-    strcpy(msg, "Please select:\n1. Play\n2. Watch\n0. Exit\n");
 }
 
 void *get_in_addr(struct sockaddr *sa)
@@ -306,7 +403,7 @@ int main(int argc, char *argv[]){
         if(pselect(fd_max + 1,&read_fds, NULL, NULL, NULL, &oldset) == -1){
             if(errno == EINTR){ //If SIGALRM is set off
                 //Check on clients and stuff
-                checkClients(games, clients, nrOfClients, nrOfGames, msg);
+                checkClients(games, clients, nrOfClients, nrOfGames, msg); //Check all clients every sec
                 continue;
             }else{
             perror("Select");
@@ -449,17 +546,10 @@ int main(int argc, char *argv[]){
                                 games[gameIndex]->readyPlayers++;
                             }
                             if(games[gameIndex]->readyPlayers == 2){
-                                rpsMsg(msg);
-                                for(int j = 0; j < games[gameIndex]->readyPlayers; ++j){                            
-                                    if(send(games[gameIndex]->clients[j]->fdNr, msg, strlen(msg), 0) == -1){
-                                        perror("send");
-                                    }    
-                                    games[gameIndex]->clients[j]->start = time(NULL);
-                                }
-                                games[gameIndex]->stage++;
+                                games[gameIndex]->stage = 1;
                             }
                         }
-                        if(games[gameIndex]->stage == 1 && clients[index]->inGame == true && clients[index]->rpsPick == 0){ // Client gets to choose rock paper or scissor
+                        if(games[gameIndex]->stage == 2 && clients[index]->inGame == true && clients[index]->rpsPick == 0){ // Client gets to choose rock paper or scissor
                             if(strcmp(msg, "1") == 0 && clients[index]->inGame == true){
                                 printf("picked Rock\n");
                                 clients[index]->rpsPick = 1;
@@ -487,44 +577,9 @@ int main(int argc, char *argv[]){
                                         perror("send");
                                     }
                                 }
-                                whoWon(games[gameIndex]); // Check who won round and increase score 
-                                if(games[gameIndex]->score1 != 3 && games[gameIndex]->score2 != 3){ //If no one won, go another round
-                                    rpsMsg(out_buf);
-                                    for(int j = 0; j < games[gameIndex]->readyPlayers; ++j){
-                                        if(send(games[gameIndex]->clients[j]->fdNr, out_buf, strlen(out_buf), 0) == -1){
-                                            perror("send");
-                                        }
-                                        games[gameIndex]->clients[j]->rpsPick = 0;
-                                    }
-                                    games[gameIndex]->stage = 1;
-                                }else{ // Someone won
-                                    if(games[gameIndex]->score1 == 3){//Did player 1 win?
-                                        strcpy(out_buf, "You won!\n");
-                                        if(send(games[gameIndex]->clients[0]->fdNr, out_buf, strlen(out_buf), 0) == -1){
-                                            perror("send");
-                                        }
-                                        strcpy(out_buf, "You lost!\n");//Then player 2 lost
-                                        if(send(games[gameIndex]->clients[1]->fdNr, out_buf, strlen(out_buf), 0) == -1){
-                                            perror("send");
-                                        }
-                                    }else{//And the opposite 
-                                        strcpy(out_buf, "You won!\n");
-                                        if(send(games[gameIndex]->clients[1]->fdNr, out_buf, strlen(out_buf), 0) == -1){
-                                            perror("send");
-                                        }
-                                        strcpy(out_buf, "You lost!\n");
-                                        if(send(games[gameIndex]->clients[0]->fdNr, out_buf, strlen(out_buf), 0) == -1){
-                                            perror("send");
-                                        }
-                                    }
-                                    menuMsg(out_buf); //Send menu to everyone!
-                                    for(int j = 0; j < games[gameIndex]->readyPlayers; ++j){
-                                        games[gameIndex]->clients[j]->rpsPick = 0;
-                                        games[gameIndex]->clients[j]->inGame = false;
-                                        if(send(games[gameIndex]->clients[j]->fdNr, out_buf, strlen(out_buf), 0) == -1){
-                                            perror("send");
-                                        }
-                                    }
+                                whoWon(games[gameIndex], out_buf); // Check who won round and increase score 
+                                gameWon(games, out_buf, gameIndex, nrOfGames); //did someone reach score 3? Also sending correct msg to everyone
+                                if(games[gameIndex]->score1 == 3 || games[gameIndex]->score2 == 3){
                                     removeGame(games, nrOfGames, gameIndex);
                                 }
                             }
