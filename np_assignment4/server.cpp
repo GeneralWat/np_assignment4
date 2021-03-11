@@ -30,6 +30,7 @@ struct client{
     bool timeout = false;
     int rpsPick = 0;
     time_t start;
+    time_t recvTime;
 };
 
 struct game{
@@ -41,7 +42,6 @@ struct game{
     int stage = 0;
     int nrOfRounds = 0;
     int countDown = 4;
-    time_t sendTime;
 };
 
 bool checkClientsTime(client *client){
@@ -212,7 +212,7 @@ void checkClients(game *games[], client *clients[], int &nrOfClients, int &nrOfG
                         rpsMsg(msg);
                         for(int z = 0; z < games[i]->readyPlayers; ++z){
                             send(games[i]->clients[z]->fdNr, msg, strlen(msg), 0);
-                            games[i]->sendTime = time(NULL);
+                            games[i]->clients[z]->recvTime = time(NULL);
                             games[i]->clients[z]->rpsPick = 0;
                             games[i]->clients[z]->start = time(NULL); //Start timer!
                         }
