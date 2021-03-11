@@ -13,12 +13,17 @@
 #include <vector>
 #include <time.h>
 #include <errno.h>
+#include <algorithm>
+#include <iostream>
 
 #define BACKLOG 10
 #define MAXDATASIZE 256
 #define ROCK 1
 #define PAPER 2
 #define SCISSOR 3
+
+
+float medAnsTime;
 
 struct client{
     sockaddr_storage clientInfo;
@@ -28,13 +33,19 @@ struct client{
     bool inGame = false;
     bool inQueue = false;
     bool timeout = false;
+    bool spectate = false;
+    bool watchingGame = false;
     int rpsPick = 0;
     time_t start;
     time_t recvTime;
+    float timeSum = 0;
+    float medAnsTime;
 };
 
 struct game{
     struct client *clients[2];
+    struct client *spectator[4];
+    int nrOfSpectators = 0;
     int playersInGame = 0;
     int readyPlayers = 0;
     int score1 = 0;
@@ -44,41 +55,125 @@ struct game{
     int countDown = 4;
 };
 
+int nrOfInTop = 0;
+float toplist[10];
+
+void addAnswerTime(client *clients){
+time_t end = time(NULL);
+  float sec = (end - clients->recvTime); 
+  clients->timeSum += sec;
+}
+
 bool checkClientsTime(client *client){
   time_t end = time(NULL);
   int sec = (end - client->start); 
   bool result = false;
-  if(sec >= 3){//Have they answered the last 2 seconds? 
+  if(sec >= 2){//Have they answered the last 2 seconds? 
     result = true;
   }
   return result;
 }
 
+void checkToplist(client *client){
+    if(nrOfInTop == 0){
+        toplist[0] = client->medAnsTime;
+        nrOfInTop++;
+    }else if(nrOfInTop < 10){
+        toplist[nrOfInTop] = client->medAnsTime;
+        nrOfInTop++;
+        float temp;
+        for(int i = 0; i < nrOfInTop; ++i){
+            int indexOfMin = i;
+            for(int k = i + 1; k < nrOfInTop; ++k){
+                if(toplist[k] < toplist[indexOfMin]){
+                    indexOfMin = k;
+                }
+            }
+            temp = toplist[i];
+            toplist[i] = toplist[indexOfMin];
+            toplist[indexOfMin] = temp;
+        }
+    }else if(client->medAnsTime < toplist[nrOfInTop - 1]){
+        toplist[nrOfInTop - 1] = client->medAnsTime;
+         float temp;
+        for(int i = 0; i < nrOfInTop; ++i){
+            int indexOfMin = i;
+            for(int k = i + 1; k < nrOfInTop; ++k){
+                if(toplist[k] < toplist[indexOfMin]){
+                    indexOfMin = k;
+                }
+            }
+            temp = toplist[i];
+            toplist[i] = toplist[indexOfMin];
+            toplist[indexOfMin] = temp;
+        }
+    }
+}
+
+void sendToSpectators(game *games, char msg[]){
+    if(games->nrOfSpectators > 0){
+        for(int i = 0; i < games->nrOfSpectators; ++i){
+            if(send(games->spectator[i]->fdNr, msg, strlen(msg), 0) == -1){
+                perror("send");
+            }
+        }
+    }
+}
+
+void sendActiveGames(client *clients,int &nrOfGames, char msg[], char out_buf[], game *games[]){
+    strcpy(msg, "Type the number of the game you want to spectate\nAvable games:\n");
+    if(nrOfGames == 0){//No games up
+    clients->spectate = false;
+    clients->watchingGame = false;
+        sprintf(out_buf, "%sNo games is active, returning to menu\nPlease select:\n1. Play\n2. Watch\n0. Exit\n", msg);
+        send(clients->fdNr, out_buf, strlen(out_buf), 0);
+    }else{
+        clients->watchingGame = false;
+        send(clients->fdNr, msg, strlen(msg), 0);
+        clients->spectate = true;
+        for(int j = 0; j < nrOfGames; ++j){
+            sprintf(out_buf, "Game %d: Score %d - %d\n", j + 1, games[j]->score1, games[j]->score2);
+            if(send(clients->fdNr, out_buf, strlen(out_buf), 0) == -1){
+                perror("Send");
+            }
+        }
+    }
+}
+
 void whoWon(game *games, char msg[]){ //Check round score and send to clients
     games->nrOfRounds++;
     if(games->clients[0]->timeout == true && games->clients[1]->timeout == false){
+        addAnswerTime(games->clients[0]);
         games->score2++;
         sprintf(msg,"Round %d\nYou timed out!, Other player won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
         send(games->clients[0]->fdNr, msg, strlen(msg), 0);
         sprintf(msg,"Rounds %d\nOther player timed out!, You won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
         send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+        sprintf(msg, "Round %d\nPlayer 1 timed out!\nPlayer 2 automatic win\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+        sendToSpectators(games, msg);
         games->clients[0]->timeout = false;
         printf("Score now is %d vs %d\n", games->score1, games->score2);
     }else if(games->clients[1]->timeout == true && games->clients[0]->timeout == false){
+        addAnswerTime(games->clients[1]);
         games->score1++;
         sprintf(msg,"Round %d\nYou timed out!, Other player won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
         send(games->clients[1]->fdNr, msg, strlen(msg), 0);
         sprintf(msg,"Round %d\nOther player timed out!, You won round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
         send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+        sprintf(msg, "Round %d\nPlayer 2 timed out!\nPlayer 1 automatic win\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+        sendToSpectators(games, msg);
         games->clients[1]->timeout = false;
         printf("Score now is %d vs %d\n", games->score1, games->score2);
     }else if(games->clients[0]->timeout == true && games->clients[1]->timeout == true){
         games->clients[0]->timeout = false;
         games->clients[1]->timeout = false;
+        addAnswerTime(games->clients[0]);
+        addAnswerTime(games->clients[1]);
         sprintf(msg,"Round %d\nBoth timed out! Restarting round\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
         for(int i = 0; i < games->readyPlayers; ++i){
             send(games->clients[i]->fdNr, msg, strlen(msg), 0);
         }
+        sendToSpectators(games, msg);
         printf("Score now is %d vs %d\n", games->score1, games->score2);
     }else{
         if(games->clients[0]->rpsPick == games->clients[1]->rpsPick && games->clients[0]->rpsPick != 0 && games->clients[1]->rpsPick != 0){
@@ -87,6 +182,7 @@ void whoWon(game *games, char msg[]){ //Check round score and send to clients
             for(int i = 0; i < games->readyPlayers; ++i){
                 send(games->clients[i]->fdNr, msg, strlen(msg), 0);
             }
+            sendToSpectators(games, msg);
         }else if(games->clients[0]->rpsPick == ROCK && games->clients[1]->rpsPick == SCISSOR){
             games->score1++;
             printf("Score now is %d vs %d\n", games->score1, games->score2);
@@ -94,6 +190,8 @@ void whoWon(game *games, char msg[]){ //Check round score and send to clients
             send(games->clients[0]->fdNr, msg, strlen(msg), 0);
             sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
             send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nPlayer 1 won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            sendToSpectators(games, msg);
         }else if(games->clients[1]->rpsPick == ROCK && games->clients[0]->rpsPick == SCISSOR){
             games->score2++;
             printf("Score now is %d vs %d\n", games->score1, games->score2);
@@ -101,6 +199,8 @@ void whoWon(game *games, char msg[]){ //Check round score and send to clients
             send(games->clients[1]->fdNr, msg, strlen(msg), 0);
             sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
             send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nPlayer 2 won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            sendToSpectators(games, msg);
         }else if(games->clients[0]->rpsPick == SCISSOR && games->clients[1]->rpsPick == PAPER){
             games->score1++;
             printf("Score now is %d vs %d\n", games->score1, games->score2);
@@ -108,11 +208,15 @@ void whoWon(game *games, char msg[]){ //Check round score and send to clients
             send(games->clients[0]->fdNr, msg, strlen(msg), 0);
             sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
             send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nPlayer 1 won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            sendToSpectators(games, msg);
         }else if(games->clients[1]->rpsPick == SCISSOR && games->clients[0]->rpsPick == PAPER){
             games->score2++;
             printf("Score now is %d vs %d\n", games->score1, games->score2);
             sprintf(msg, "Round %d\nYou won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
             send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nPlayer 2 won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            sendToSpectators(games, msg);
             sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
             send(games->clients[0]->fdNr, msg, strlen(msg), 0);
         }else if(games->clients[0]->rpsPick == PAPER && games->clients[1]->rpsPick == ROCK){
@@ -122,6 +226,8 @@ void whoWon(game *games, char msg[]){ //Check round score and send to clients
             send(games->clients[0]->fdNr, msg, strlen(msg), 0);
             sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
             send(games->clients[1]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nPlayer 1 won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            sendToSpectators(games, msg);
         }else if(games->clients[1]->rpsPick == PAPER && games->clients[0]->rpsPick == ROCK){
             games->score2++;
             printf("Score now is %d vs %d\n", games->score1, games->score2);
@@ -129,17 +235,34 @@ void whoWon(game *games, char msg[]){ //Check round score and send to clients
             send(games->clients[1]->fdNr, msg, strlen(msg), 0);
             sprintf(msg, "Round %d\nYou lost the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
             send(games->clients[0]->fdNr, msg, strlen(msg), 0);
+            sprintf(msg, "Round %d\nPlayer 2 won the round!\nScore: %d vs %d\n", games->nrOfRounds,games->score1, games->score2);
+            sendToSpectators(games, msg);
         }
     }
+
     games->stage = 1;
 }
 
 void rpsMsg(char msg[]){
-    strcpy(msg, "1. Rock\n2. Paper\n3. Scissor\n");
+    strcpy(msg, "Please select:\n1. Rock\n2. Paper\n3. Scissor\n");
 }
 
 void menuMsg(char msg[]){
-    strcpy(msg, "Please select:\n1. Play\n2. Watch\n0. Exit\n");
+    strcpy(msg, "Please select:\n1. Play\n2. Watch\n3. Toplist\n0. Exit\n");
+}
+
+void showToplist(client *client, char msg[], char out_buf[]){
+    strcpy(msg, "Toplist\nFastest medium answer time:\n");
+    send(client->fdNr, msg, strlen(msg), 0);
+    if(nrOfInTop == 0){
+        sprintf(out_buf, "No one has made it on the toplist!\n");
+        send(client->fdNr, out_buf, strlen(out_buf), 0);
+    }else{
+        for(int i = 0; i < nrOfInTop; ++i){
+            sprintf(out_buf, "%d. %f sec\n",i + 1, toplist[i]);
+            send(client->fdNr, out_buf, strlen(out_buf), 0);
+        }
+    }
 }
 
 void removeGame(game *games[], int &nrOfGames, int indexToRemove){
@@ -153,12 +276,23 @@ void removeGame(game *games[], int &nrOfGames, int indexToRemove){
 }
 
 void gameWon(game *game[], char msg[], int &gameIndex, int &nrOfGames){ //Just to check if someone has a score of 3
+    char temp[MAXDATASIZE];
     if(game[gameIndex]->score1 == 3 || game[gameIndex]->score2 == 3){
+        for(int i = 0; i < game[gameIndex]->readyPlayers; ++i){
+            game[gameIndex]->clients[i]->medAnsTime = (float)game[gameIndex]->clients[i]->timeSum / game[gameIndex]->nrOfRounds;
+            sprintf(msg, "Your medium answer time was %f sec \n", game[gameIndex]->clients[i]->medAnsTime);
+            send(game[gameIndex]->clients[i]->fdNr, msg, strlen(msg),0);
+            checkToplist(game[gameIndex]->clients[i]);
+            game[gameIndex]->clients[i]->medAnsTime = 0;
+            game[gameIndex]->clients[i]->timeSum = 0;
+        }
         if(game[gameIndex]->score1 == 3){
             strcpy(msg, "You won!\n");
             if(send(game[gameIndex]->clients[0]->fdNr, msg, strlen(msg), 0) == -1){
                 perror("send");
             }
+            strcpy(msg, "Player 1 won!\n");
+            sendToSpectators(game[gameIndex], msg);
             strcpy(msg, "You lost!\n");//Then player 2 lost
             if(send(game[gameIndex]->clients[1]->fdNr, msg, strlen(msg), 0) == -1){
                 perror("send");
@@ -168,6 +302,8 @@ void gameWon(game *game[], char msg[], int &gameIndex, int &nrOfGames){ //Just t
             if(send(game[gameIndex]->clients[1]->fdNr, msg, strlen(msg), 0) == -1){
                 perror("send");
             }
+            strcpy(msg, "Player 2 won!\n");
+            sendToSpectators(game[gameIndex], msg);
             strcpy(msg, "You lost!\n");//Then player 2 lost
             if(send(game[gameIndex]->clients[0]->fdNr, msg, strlen(msg), 0) == -1){
                 perror("send");
@@ -180,6 +316,12 @@ void gameWon(game *game[], char msg[], int &gameIndex, int &nrOfGames){ //Just t
             if(send(game[gameIndex]->clients[j]->fdNr, msg, strlen(msg), 0) == -1){
                 perror("send");
             }
+        }
+        if(game[gameIndex]->nrOfSpectators > 0){
+            for(int j = 0; j < game[gameIndex]->nrOfSpectators; ++j){
+                sendActiveGames(game[gameIndex]->spectator[j], nrOfGames, msg, temp, game);
+                
+            }   
         }
         removeGame(game, nrOfGames, gameIndex);
     }
@@ -206,6 +348,9 @@ void checkClients(game *games[], client *clients[], int &nrOfClients, int &nrOfG
                     if(games[i]->countDown > 0){
                         sprintf(msg, "Game will start in %d seconds\n", games[i]->countDown);
                         send(games[i]->clients[j]->fdNr, msg, strlen(msg), 0);
+                        if(j == 0){
+                            sendToSpectators(games[i], msg);
+                        }
                     }
                     if(games[i]->countDown == 0){ // To wait the extra second
                         games[i]->stage++;
@@ -216,6 +361,7 @@ void checkClients(game *games[], client *clients[], int &nrOfClients, int &nrOfG
                             games[i]->clients[z]->rpsPick = 0;
                             games[i]->clients[z]->start = time(NULL); //Start timer!
                         }
+                        sendToSpectators(games[i], msg);
                         games[i]->countDown = 4;
                         break;
                     }
@@ -454,29 +600,42 @@ int main(int argc, char *argv[]){
                                     for(int x = 0; x < nrOfGames; ++x){ //FInd the game that the client is in
                                         if(games[x]->clients[0]->fdNr == i){
                                             //Delete game
-                                            printf("Called 1\n");
                                             resetClient(games, clients, nrOfClients, 1, x);
                                             menuMsg(out_buf);
                                             if(send(games[x]->clients[1]->fdNr, out_buf, strlen(out_buf), 0) == -1){
                                                 perror("send");
                                             }
                                             removeGame(games, nrOfGames, x);
-                                            printf("NrOFGames: %d\n", nrOfGames);
                                         }else if(games[x]->clients[1]->fdNr == i){
-                                            printf("Called 2\n");
                                             resetClient(games, clients, nrOfClients, 0, x);
                                             menuMsg(out_buf);
                                             if(send(games[x]->clients[0]->fdNr, out_buf, strlen(out_buf), 0) == -1){
                                                 perror("send");
                                             }
                                             removeGame(games, nrOfGames, x);
-                                            printf("NrOFGames: %d\n", nrOfGames);
+                                        }
+                                        if(games[x]->nrOfSpectators > 0){
+                                            for(int z = 0; z < games[x]->nrOfSpectators; ++z){
+                                                sendActiveGames(clients[index], nrOfGames, msg, out_buf, games);
+                                            }
                                         }
                                     }
                                 }
                                 if(clients[j]->inQueue == true){
-                                    printf("Called this\n");
                                     queue--;
+                                }
+                                if(clients[j]->spectate == true){
+                                    for(int z = 0; z < nrOfGames; ++z){
+                                        for(int j = 0; j < games[z]->nrOfSpectators; ++j){
+                                            if(games[z]->spectator[j]->fdNr == i){
+                                                games[z]->nrOfSpectators--;
+                                                if(j != games[z]->nrOfSpectators){
+                                                    games[z]->spectator[j] = games[z]->spectator[games[z]->nrOfSpectators];
+                                                }
+                                                break;
+                                            }
+                                        }
+                                    }
                                 }
                                 freeClient(clients, nrOfClients, j);//Set the client free!
                             }
@@ -491,7 +650,7 @@ int main(int argc, char *argv[]){
                             }
                         }
                         sscanf(in_buf, "%s %s", command, msg);
-                        if(strcmp(command, "OPT") == 0 && clients[index]->inGame == false && clients[index]->inQueue == false){
+                        if(strcmp(command, "OPT") == 0 && clients[index]->inGame == false && clients[index]->inQueue == false && clients[index]->spectate == false){
                             if(strcmp(msg, "OK") == 0){
                                 menuMsg(out_buf);
                                 printf("Sending menu\n");
@@ -526,20 +685,56 @@ int main(int argc, char *argv[]){
                                         if(send(games[nrOfGames]->clients[j]->fdNr, out_buf, strlen(out_buf), 0) == -1){
                                             perror("send");
                                         }
-                                        
                                     }
                                     nrOfGames++;
                                     
                                 }
+                            }else if(strcmp(msg, "2") == 0){
+                                clients[index]->spectate = true;
+                                sendActiveGames(clients[index], nrOfGames, msg, out_buf, games);
+                            }else if(strcmp(msg, "3") == 0){//show toplist!
+                                showToplist(clients[index], msg, out_buf);
+                                menuMsg(msg);
+                                send(clients[index]->fdNr, msg, strlen(msg), 0);
                             }
+                        }
+                        if(strcmp(command, "OPT") == 0 && clients[index]->spectate == true && clients[index]->watchingGame == false){
+                            if(nrOfGames == 0){
+                                sendActiveGames(clients[index], nrOfGames, msg, out_buf, games);
+                            }else if(atoi(msg) <= nrOfGames && atoi(msg) > 0){
+                                for(int j = 0; j < nrOfGames; ++j){
+                                    if(atoi(msg) == j + 1){
+                                        games[j]->spectator[games[j]->nrOfSpectators] = clients[index];
+                                        games[j]->nrOfSpectators++;
+                                        clients[index]->watchingGame = true;
+                                        break;
+                                    }
+                                }  
+                            } 
+                            
+                        }else if(clients[index]->spectate == true && strlen(msg) > 0 && clients[index]->watchingGame == true){
+                            for(int z = 0; z < nrOfGames; ++z){
+                                for(int j = 0; j < games[z]->nrOfSpectators; ++j){
+                                    if(games[z]->spectator[j]->fdNr == i){
+                                        games[z]->nrOfSpectators--;
+                                        if(j != games[z]->nrOfSpectators){
+                                            games[z]->spectator[j] = games[z]->spectator[games[z]->nrOfSpectators];
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                            sendActiveGames(clients[index], nrOfGames, msg, out_buf, games);
+                            clients[index]->watchingGame = false;
                         }
                         if(nrOfGames > 0){
                             for(int j = 0; j < nrOfGames; ++j){
                                 if(clients[index]->fdNr == games[j]->clients[0]->fdNr || clients[index]->fdNr == games[j]->clients[1]->fdNr){
                                     gameIndex = j;
                                 }
-                            }
+                        }
                         if(strcmp(msg, "ready") == 0 && clients[index]->inGame == true && games[gameIndex]->stage == 0){ // if they are ready, send rock, paper. scissor msg
+                            
                             if(games[gameIndex]->clients[0]->fdNr == i){
                                games[gameIndex]->readyPlayers++;
                             }else if(games[gameIndex]->clients[1]->fdNr == i){
@@ -553,12 +748,15 @@ int main(int argc, char *argv[]){
                             if(strcmp(msg, "1") == 0 && clients[index]->inGame == true){
                                 printf("picked Rock\n");
                                 clients[index]->rpsPick = 1;
+                                addAnswerTime(clients[index]);
                             }else if(strcmp(msg, "2") == 0 && clients[index]->inGame == true){
                                 printf("picked Paper\n");
                                 clients[index]->rpsPick = 2;
+                                addAnswerTime(clients[index]);
                             }else if(strcmp(msg, "3") == 0 && clients[index]->inGame == true){
                                 printf("picked Scissor\n");
                                 clients[index]->rpsPick = 3;
+                                addAnswerTime(clients[index]);
                             }
                         }
                         }
@@ -580,6 +778,11 @@ int main(int argc, char *argv[]){
                                 whoWon(games[gameIndex], out_buf); // Check who won round and increase score 
                                 gameWon(games, out_buf, gameIndex, nrOfGames); //did someone reach score 3? Also sending correct msg to everyone
                                 if(games[gameIndex]->score1 == 3 || games[gameIndex]->score2 == 3){
+                                    if(games[gameIndex]->nrOfSpectators > 0){
+                                        for(int j = 0;j < games[gameIndex]->nrOfSpectators; ++j){
+                                            sendActiveGames(games[gameIndex]->spectator[j], nrOfGames, msg, out_buf, games);
+                                        }
+                                    }
                                     removeGame(games, nrOfGames, gameIndex);
                                 }
                             }
